@@ -26,6 +26,9 @@ export const extractCourses = (studentData) => {
     } else if (typeof courses === 'number') {
       // If only one course is stored as a number
       courses = [courses.toString()];
+    } else if (Array.isArray(courses)) {
+      // If courses are already an array
+      courses = courses;
     } else if (!courses) {
       // If courses field is empty
       courses = [];
@@ -48,7 +51,8 @@ export const getStudentGroupsByCourse = (studentData) => {
       branches: new Set(),
       years: new Set(),
       semesters: new Set(),
-      count: 0
+      count: 0,
+      studentIds: new Set()
     };
   });
   
@@ -59,6 +63,8 @@ export const getStudentGroupsByCourse = (studentData) => {
       courses = courses.split(',').map(course => course.trim());
     } else if (typeof courses === 'number') {
       courses = [courses.toString()];
+    } else if (Array.isArray(courses)) {
+      courses = courses;
     } else if (!courses) {
       courses = [];
     }
@@ -68,6 +74,7 @@ export const getStudentGroupsByCourse = (studentData) => {
         studentGroups[course].branches.add(student.Branch);
         studentGroups[course].years.add(student.Year);
         studentGroups[course].semesters.add(student.Semester);
+        studentGroups[course].studentIds.add(student["Student ID"]);
         studentGroups[course].count++;
       }
     });
@@ -78,6 +85,7 @@ export const getStudentGroupsByCourse = (studentData) => {
     studentGroups[course].branches = Array.from(studentGroups[course].branches);
     studentGroups[course].years = Array.from(studentGroups[course].years);
     studentGroups[course].semesters = Array.from(studentGroups[course].semesters);
+    studentGroups[course].studentIds = Array.from(studentGroups[course].studentIds);
   });
   
   return studentGroups;
@@ -86,11 +94,43 @@ export const getStudentGroupsByCourse = (studentData) => {
 // Assign venues based on student count
 export const assignVenue = (course, studentGroups, venues) => {
   const studentCount = studentGroups[course].count;
+  
+  if (venues.length <= 0) return "No venue available";
+  
   if (studentCount <= 50) return venues[0];
-  if (studentCount <= 100) return venues[1];
-  if (studentCount <= 150) return venues[2];
-  if (studentCount <= 200) return venues[3];
-  return venues[4]; // Largest venue for more than 200 students
+  if (studentCount <= 100 && venues.length > 1) return venues[1];
+  if (studentCount <= 150 && venues.length > 2) return venues[2];
+  if (studentCount <= 200 && venues.length > 3) return venues[3];
+  return venues[venues.length - 1]; // Largest venue for more students
+};
+
+// Check if there are common students between two courses
+export const hasCommonStudents = (course1, course2, studentGroups) => {
+  // If the courses are the same, they definitely share students
+  if (course1 === course2) return true;
+  
+  const group1 = studentGroups[course1];
+  const group2 = studentGroups[course2];
+  
+  if (!group1 || !group2) return false;
+  
+  // Quick check: if there's no overlap in branches, years, or semesters, there can't be common students
+  const branchOverlap = group1.branches.some(branch => group2.branches.includes(branch));
+  if (!branchOverlap) return false;
+  
+  const yearOverlap = group1.years.some(year => group2.years.includes(year));
+  if (!yearOverlap) return false;
+  
+  const semesterOverlap = group1.semesters.some(semester => group2.semesters.includes(semester));
+  if (!semesterOverlap) return false;
+  
+  // If we have studentIds, check for direct overlap
+  if (group1.studentIds && group2.studentIds) {
+    return group1.studentIds.some(id => group2.studentIds.includes(id));
+  }
+  
+  // Default to true if we can't definitively rule out overlap
+  return true;
 };
 
 // Generate exam schedule
@@ -119,35 +159,16 @@ export const generateExamSchedule = (studentData, params, venues) => {
   // Create exam scheduling algorithm
   const schedule = [];
   let currentDate = new Date(start);
-  let timeSlot = 1; // 1 for morning, 2 for afternoon
+  let timeSlot = 1; // 1 for morning, 2 for afternoon, 3 for evening
   let courseIndex = 0;
   
   // Function to check if course can be scheduled at this time
   const canScheduleCourse = (course, date, slot) => {
-    // Check if any student already has an exam at this time
+    // Check if any exam is already scheduled at this time and has common students
     for (const scheduledExam of schedule) {
       if (scheduledExam.date.getTime() === date.getTime() && scheduledExam.timeSlot === slot) {
-        // Check for student overlap
-        const currentCourseGroups = studentGroups[course];
-        const scheduledCourseGroups = studentGroups[scheduledExam.course];
-        
-        // Check branch overlap
-        const branchOverlap = currentCourseGroups.branches.some(branch => 
-          scheduledCourseGroups.branches.includes(branch)
-        );
-        
-        // Check year overlap
-        const yearOverlap = currentCourseGroups.years.some(year => 
-          scheduledCourseGroups.years.includes(year)
-        );
-        
-        // Check semester overlap
-        const semesterOverlap = currentCourseGroups.semesters.some(semester => 
-          scheduledCourseGroups.semesters.includes(semester)
-        );
-        
-        // If there's overlap in all three, we can't schedule here
-        if (branchOverlap && yearOverlap && semesterOverlap) {
+        // Check for student overlap using optimized function
+        if (hasCommonStudents(course, scheduledExam.course, studentGroups)) {
           return false;
         }
       }
@@ -170,6 +191,18 @@ export const generateExamSchedule = (studentData, params, venues) => {
     
     if (canScheduleCourse(course, currentDate, timeSlot)) {
       // Schedule the exam
+      const startTimeMap = {
+        1: '9:00 AM',
+        2: '2:00 PM',
+        3: '6:00 PM'
+      };
+      
+      const endTimeMap = {
+        1: `${9 + examDuration}:00 ${examDuration >= 3 ? 'PM' : 'AM'}`,
+        2: `${2 + examDuration}:00 PM`,
+        3: `${6 + examDuration}:00 PM`
+      };
+      
       schedule.push({
         course,
         date: new Date(currentDate),
@@ -179,8 +212,8 @@ export const generateExamSchedule = (studentData, params, venues) => {
         years: studentGroups[course].years,
         semesters: studentGroups[course].semesters,
         studentCount: studentGroups[course].count,
-        startTime: timeSlot === 1 ? '9:00 AM' : '2:00 PM',
-        endTime: timeSlot === 1 ? '12:00 PM' : '5:00 PM'
+        startTime: startTimeMap[timeSlot],
+        endTime: endTimeMap[timeSlot]
       });
       
       courseIndex++;
@@ -192,14 +225,14 @@ export const generateExamSchedule = (studentData, params, venues) => {
     } else {
       timeSlot = 1;
       currentDate = new Date(currentDate);
-      currentDate.setDate(currentDate.getDate() + gapBetweenExams);
+      currentDate.setDate(currentDate.getDate() + 1 + gapBetweenExams);
     }
   }
   
   // Check if all courses were scheduled
   let error = null;
   if (courseIndex < courses.length) {
-    error = `Could not schedule all exams within the given date range. Only ${courseIndex} out of ${courses.length} courses were scheduled.`;
+    error = `Could not schedule all exams within the given date range. Only ${courseIndex} out of ${courses.length} courses were scheduled. Consider extending the exam period or adjusting parameters.`;
   }
   
   // Sort schedule by date and time slot
@@ -215,7 +248,7 @@ export const generateExamSchedule = (studentData, params, venues) => {
 
 // Export schedule to Excel
 export const exportToExcel = (examSchedule) => {
-  if (!examSchedule) return;
+  if (!examSchedule || examSchedule.length === 0) return;
   
   // Prepare data for export
   const data = examSchedule.map(exam => ({
@@ -232,43 +265,99 @@ export const exportToExcel = (examSchedule) => {
   // Create worksheet
   const ws = XLSX.utils.json_to_sheet(data);
   
+  // Set column widths
+  const colWidths = [
+    { wch: 10 }, // Course
+    { wch: 20 }, // Date
+    { wch: 20 }, // Time
+    { wch: 15 }, // Venue
+    { wch: 20 }, // Branches
+    { wch: 10 }, // Years
+    { wch: 15 }, // Semesters
+    { wch: 15 }  // Student Count
+  ];
+  
+  ws['!cols'] = colWidths;
+  
+  // Add title row with merged cells
+  const range = { s: { c: 0, r: 0 }, e: { c: 7, r: 0 } };
+  const titleRow = [{ v: 'SVIT College - Exam Schedule', t: 's', s: { font: { bold: true, sz: 14 }, alignment: { horizontal: 'center' } } }];
+  
+  // Insert the title row
+  const newWs = XLSX.utils.sheet_add_aoa(
+    XLSX.utils.sheet_new(),
+    [titleRow, [], ['Course', 'Date', 'Time', 'Venue', 'Branches', 'Years', 'Semesters', 'Student Count']],
+    { origin: 'A1' }
+  );
+  
+  // Add the data starting from row 4
+  const jsonData = XLSX.utils.sheet_to_json(ws);
+  XLSX.utils.sheet_add_json(newWs, jsonData, { origin: 'A4', skipHeader: true });
+  
+  // Set merged cell for title
+  newWs['!merges'] = [range];
+  
   // Create workbook
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Exam Schedule');
+  XLSX.utils.book_append_sheet(wb, newWs, 'Exam Schedule');
+  
+  // Add current date to filename
+  const today = new Date();
+  const dateStr = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
   
   // Generate Excel file
-  XLSX.writeFile(wb, 'Exam_Schedule.xlsx');
+  XLSX.writeFile(wb, `SVIT_Exam_Schedule_${dateStr}.xlsx`);
 };
 
-// Format conflict detection info
+// Detect scheduling conflicts
 export const getConflictInfo = (schedule) => {
   const conflicts = [];
   
-  for (let i = 0; i < schedule.length; i++) {
-    for (let j = i + 1; j < schedule.length; j++) {
-      const exam1 = schedule[i];
-      const exam2 = schedule[j];
-      
-      // Check if exams are on the same date and time slot
-      if (exam1.date.getTime() === exam2.date.getTime() && exam1.timeSlot === exam2.timeSlot) {
-        // Check for student group overlap
-        const branchOverlap = exam1.branches.some(branch => exam2.branches.includes(branch));
-        const yearOverlap = exam1.years.some(year => exam2.years.includes(year));
-        const semesterOverlap = exam1.semesters.some(semester => exam2.semesters.includes(semester));
+  // Group exams by date and time slot for easier processing
+  const examsByDateTime = {};
+  
+  schedule.forEach(exam => {
+    const dateStr = formatDate(exam.date);
+    const timeKey = `${dateStr}_${exam.timeSlot}`;
+    
+    if (!examsByDateTime[timeKey]) {
+      examsByDateTime[timeKey] = [];
+    }
+    
+    examsByDateTime[timeKey].push(exam);
+  });
+  
+  // Check for conflicts within each time slot
+  Object.entries(examsByDateTime).forEach(([timeKey, exams]) => {
+    // Skip if only one exam in this time slot
+    if (exams.length <= 1) return;
+    
+    // Check each pair of exams for branch/year/semester overlap
+    for (let i = 0; i < exams.length; i++) {
+      for (let j = i + 1; j < exams.length; j++) {
+        const exam1 = exams[i];
+        const exam2 = exams[j];
         
-        if (branchOverlap && yearOverlap && semesterOverlap) {
+        // Find overlap in branches, years, and semesters
+        const branchOverlap = exam1.branches.filter(branch => exam2.branches.includes(branch));
+        const yearOverlap = exam1.years.filter(year => exam2.years.includes(year));
+        const semesterOverlap = exam1.semesters.filter(semester => exam2.semesters.includes(semester));
+        
+        // If there's overlap in all three dimensions, we have a conflict
+        if (branchOverlap.length > 0 && yearOverlap.length > 0 && semesterOverlap.length > 0) {
           conflicts.push({
             date: formatDate(exam1.date),
             time: exam1.startTime,
             courses: [exam1.course, exam2.course],
-            branches: exam1.branches.filter(branch => exam2.branches.includes(branch)),
-            years: exam1.years.filter(year => exam2.years.includes(year)),
-            semesters: exam1.semesters.filter(semester => exam2.semesters.includes(semester))
+            branches: branchOverlap,
+            years: yearOverlap,
+            semesters: semesterOverlap,
+            severity: 'high' // Could implement a severity algorithm later
           });
         }
       }
     }
-  }
+  });
   
   return conflicts;
 };
